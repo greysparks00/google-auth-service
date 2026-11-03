@@ -10,20 +10,22 @@ router = APIRouter()
 manager = GoogleAuthManager()
 
 # only the configured Calendar service may request tokens
-def authorize_calendar(key: str | None):
-	expected = os.getenv("GOOGLEAUTH_CALENDAR_SERVICE_KEY")
+def authorize_calendar(authorization: str | None):
+    expected = os.getenv("API_KEY")
 
-	if not expected:
-		raise HTTPException(
-			status_code=503,
-			detail="Internal service authentication is not configured."
-		)
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="Service authentication is not configured."
+        )
 
-	if not key or not secrets.compare_digest(key, expected):
-		raise HTTPException(
-			status_code=403,
-			detail="Forbidden"
-		)
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    supplied = authorization.removeprefix("Bearer ")
+
+    if not secrets.compare_digest(supplied, expected):
+        raise HTTPException(status_code=403, detail="Forbidden")
 
 @router.get("/status")
 def status():
@@ -33,23 +35,19 @@ def status():
 
 @router.post("/internal/token")
 def token(
-	response: Response,
-	x_googleauth_service_key: str | None = Header(default=None)
+    response: Response,
+    authorization: str | None = Header(default=None)
 ):
-	# never cache OAuth credentials in HTTP caches
-	response.headers["Cache-Control"] = "no-store"
+    response.headers["Cache-Control"] = "no-store"
 
-	authorize_calendar(x_googleauth_service_key)
+    authorize_calendar(authorization)
 
-	try:
-		credentials = manager.get_access_token()
+    try:
+        credentials = manager.get_access_token()
+    except GoogleAuthUnavailable:
+        raise HTTPException(
+            status_code=503,
+            detail="Google authorization unavailable."
+        )
 
-	except GoogleAuthUnavailable:
-		raise HTTPException(
-			status_code=503,
-			detail="Google authorization unavailable. Reconnect the account."
-		)
-
-	return {
-		"data": credentials
-	}
+    return {"data": credentials}
